@@ -14,10 +14,12 @@ section .data
         OUTPUT_CT   equ   10
         EULER       dq    2.718281828
     ; for random float generation
-        INT_MAX     equ   2147483647
-    ; random number generator xoshiro256
-        XORSHI_4    dq    0xA22CD65BFF6B2CE0, 0x7AF05449A5465795, 0xF46F7AAF65D601E1, 0xC5DB0BDFE6A51996
-        XORSHI_T    dq    0x0, 0x0, 0x0, 0x0
+        INT_MAX     equ   0x7FFFFFFFFFFFFFFF
+    ; prng xoshiro256
+        XORSHI_0    dq    0xA22CD65BFF6B2CE0
+        XORSHI_1    dq    0x7AF05449A5465795
+        XORSHI_2    dq    0xF46F7AAF65D601E1
+        XORSHI_3    dq    0xC5DB0BDFE6A51996
 
 section .bss
     HIDDEN_WEIGHTS resq 23520
@@ -26,7 +28,7 @@ section .bss
 section .text
     global _start
     extern printf
-
+    extern exp
 _start:
     
     ; ss = scalar single-precision
@@ -36,40 +38,136 @@ _start:
     fld qword [EULER]
     fmul st0, st1
     
-    sub rsp, 16             ; allocate memory to stack
+    sub rsp, 8              ; allocate memory to stack
     fstp qword [rsp]        ; plop st0 into stack
     movsd xmm0, qword [rsp] ; put float into xmm0
-    add rsp, 16             ; deallocate memory
+    add rsp, 8              ; deallocate memory
     call PRINT_FLOAT        ; print
 
-    ; return 0
-    mov rax, 60             ; return 0, 60 to exit
-    xor rdi, rdi
-    syscall
+    mov rsi, INT_MAX
+    call PRINT_INT
 
-GEN_FLOAT:
+    call SIGMOID
+    call PRINT_FLOAT
 
+    mov rbx, 20
+    
+    LBG:
+        dec rbx
+        call RANDOM_FLOAT
+        call PRINT_FLOAT
+        test rbx, rbx
+        jnz LBG
 
+    LED:
+    
 
+    call EXIT
+
+RANDOM_FLOAT:
+    ; return float in xmm0
+    sub rsp, 16
+    mov [rsp+8], rax
+    mov rax, INT_MAX
+    mov [rsp], rax
+    call XORSHIT
+    fild qword [rsp+8]
+    fild qword [rsp]
+    fdivp                   ; st1 = st1/st0, pop st0
+    sub rsp, 8
+    fstp qword [rsp]
+    movsd xmm0, qword [rsp]
+    add rsp, 24             ; 16 (original) + 8 (for xmm0)
     ret
 
+XORSHIT:
+    mov rax, [XORSHI_0]
+    add rax, [XORSHI_3]     ; return x[0] + x[3]
+    push rbx
+    push rcx
+    push rdx
+
+    mov rbx, [XORSHI_1]
+    shl rbx, 17             ; t = x[1] << 17
+    mov rcx, [XORSHI_2]     ; x[2] ^= x[0]
+    xor rcx, [XORSHI_0]     
+    mov [XORSHI_2], rcx     
+    
+    mov rcx, [XORSHI_3]     ; x[3] ^= x[1]
+    xor rcx, [XORSHI_1]     
+    mov [XORSHI_3], rcx     
+    
+    mov rcx, [XORSHI_1]     ; x[1] ^= x[2]
+    xor rcx, [XORSHI_2]     
+    mov [XORSHI_1], rcx     
+    
+    mov rcx, [XORSHI_0]     ; x[0] ^= x[3]
+    xor rcx, [XORSHI_3]     
+    mov [XORSHI_0], rcx  
+    
+    mov rcx, [XORSHI_2]     ; x[2] ^= t
+    xor rcx, rbx
+    mov [XORSHI_2], rcx
+
+    mov rcx, [XORSHI_3]     ; s[3] = (s[3] << 45) | (s[3] >> 19)
+    shl rcx, 45
+    mov rdx, [XORSHI_3]
+    shr rdx, 19
+    or rcx, rdx
+    mov [XORSHI_3], rcx
+
+    pop rdx
+    pop rcx
+    pop rbx
+    ret
+
+    
+
+SIGMOID:
+    ; 1/1+e^-x
+    ; x in xmm0
+    sub rsp, 8                  ; -8 for fstp and fld
+    call exp                    ; xmm0 = e^x
+    movsd [rsp], xmm0           ; [rsp] = e^x
+    fld qword [rsp]
+    fld1                        ; [1][e^x]
+    fdivrp                      ; st0 = 1/e^x
+    fld1                        ; [1][e^-x]
+    faddp                       ; st1 = st1 + st0, pop st0
+    fld1                       
+    fdivrp                      ; st1 = st0/st1, pop st0
+    fstp qword [rsp]            ; load result into xmm0
+    movsd xmm0, qword [rsp]
+    add rsp, 8                  ; clean stack
+    ret
+
+PRINT_INT:
+    ; "%d" in rdi
+    ; int in rsi
+    ; 1 in rax?
+    push rax
+    push rdi
+    mov rax, 1
+    mov rdi, INT_PERC
+    call printf
+    pop rdi
+    pop rax
+    ret
 
 PRINT_FLOAT:
-    ; need stack alignment (sub/add 8) beacuse rsp moves down with function calls
-    ; assumes stack alignment @16
-    sub rsp, 8
-    ; input float in xmm0
-    ; printf requires:
-    ; - float in xmm0
-    ; - type in rdi
-    ; - 1 in rax
-        push rax
-            push rdi
-                mov rdi, FLOAT_PERC
-                mov rax, 1
-                call printf
-            pop rdi
-        pop rax
-    ; move stack back into place
-    add rsp, 8
+    ; double in xmm0
+    ; "%f" in rdi
+    ; 1 in rax
+    push rax
+    push rdi
+    mov rdi, FLOAT_PERC
+    mov rax, 1
+    call printf
+    pop rdi
+    pop rax
     ret
+
+EXIT:
+    mov rax, 60
+    xor rdi, rdi
+    syscall

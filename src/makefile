@@ -13,7 +13,7 @@ $(OUT).o: $(SRC) | $(OBJ)
 	nasm $(NASM_FLAGS) -o $(OUT).o $(SRC)
 
 $(OUT): $(OUT).o
-	gcc $(GCC_FLAGS) -o $(OUT) $(OUT).o
+	gcc $(GCC_FLAGS) -o $(OUT) $(OUT).o -lm
 
 run: $(OUT)
 	./$(OUT)
