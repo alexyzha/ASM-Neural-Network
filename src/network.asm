@@ -9,6 +9,8 @@ section .data
         FLOAT_PERC  db    '%f', 0xA, 0
         INT_PERC    db    '%d', 0xA, 0
     ; network consts
+        HIDDEN_NCT  equ   23520
+        OUTPUT_NCT  equ   300
         INPUT_CT    equ   784
         HIDDEN_CT   equ   30 
         OUTPUT_CT   equ   10
@@ -22,47 +24,117 @@ section .data
         XORSHI_3    dq    0xC5DB0BDFE6A51996
 
 section .bss
-    HIDDEN_WEIGHTS resq 23520
-    OUTPUT_WEIGHTS resq 300
+    INPUTS          resq  784
+    HIDDEN_WEIGHTS  resq  23520
+    OUTPUT_WEIGHTS  resq  300
+    HIDDEN_OUTPUT   resq  30
+    OUTPUT_OUTPUT   resq  10
 
 section .text
     global _start
     extern printf
     extern exp
 _start:
-    
-    ; ss = scalar single-precision
-    ; scalar = single val
-    fninit
-    fld qword [EULER]
-    fld qword [EULER]
-    fmul st0, st1
-    
-    sub rsp, 8              ; allocate memory to stack
-    fstp qword [rsp]        ; plop st0 into stack
-    movsd xmm0, qword [rsp] ; put float into xmm0
-    add rsp, 8              ; deallocate memory
-    call PRINT_FLOAT        ; print
+    fninit                  ; initialize the fpu
+    call INIT_WEIGHTS       ; create prand weights
+    call PRINT_WEIGHTS
 
-    mov rsi, INT_MAX
-    call PRINT_INT
 
-    call SIGMOID
-    call PRINT_FLOAT
+    call EXIT               ; return 0;
 
-    mov rbx, 20
-    
-    LBG:
-        dec rbx
-        call RANDOM_FLOAT
+
+FORWARD_PROP:
+    ; assumes all inputs already in input array
+    mov rax, HIDDEN_NCT
+    dec rax
+    mov rcx, 8
+    mul rcx                 ; rax = 23519 * 8, offset of last qword
+    ITER_ALL_HIDDEN:
+        lea rcx, [HIDDEN_WEIGHTS]+rax
+        mov rdx, HIDDEN_CT
+        ITER_HIDDEN_NODE:
+
+
+
+
+
+        test rax, rax
+        jnz ITER_ALL_HIDDEN
+
+ZERO_OUTPUT:
+    fld1
+    fld1
+    fsubp
+    sub rsp, 8
+    fstp qword [rsp]
+    movsd xmm0, qword [rsp]
+    add rsp, 8              ; 0.0 in xmm0
+    ; iterate through all hidden outputs
+    lea rax, [HIDDEN_OUTPUT]
+    mov rcx, HIDDEN_CT
+    ZO_HIDDEN_LBG:
+        movsd [rax], xmm0
+        add rax, 8
+        dec rcx
+        test rcx, rcx
+        jnz ZO_HIDDEN_LBG
+    ; iterate through all outputs
+    lea rax, [OUTPUT_OUTPUT]
+    mov rcx, OUTPUT_CT
+    ZO_OUTPUT_LBG:
+        movsd [rax], xmm0
+        add rax, 8
+        dec rcx
+        test rcx, rcx
+        jnz ZO_OUTPUT_LBG
+    ret
+
+PRINT_WEIGHTS:
+    ; print hidden weights
+    lea rbx, [HIDDEN_WEIGHTS]
+    mov r12, HIDDEN_NCT
+    PW_LBG_H:
+        movsd xmm0, qword [rbx]
         call PRINT_FLOAT
-        test rbx, rbx
-        jnz LBG
+        add rbx, 8
+        dec r12
+        test r12, r12
+        jnz PW_LBG_H
+    ret
+    ; print output weights
+    lea rbx, [OUTPUT_WEIGHTS]
+    mov r12, OUTPUT_NCT
+    PW_LBG_O:
+        movsd xmm0, qword [rbx]
+        call PRINT_FLOAT
+        add rbx, 8
+        dec r12
+        test r12, r12
+        jnz PW_LBG_O
+    ret
 
-    LED:
-    
-
-    call EXIT
+INIT_WEIGHTS:
+    ; init all hidden weights
+    lea rbx, [HIDDEN_WEIGHTS]
+    mov r12, HIDDEN_NCT     ; 23520
+    IW_LBG_H:
+        call RANDOM_FLOAT
+        movsd [rbx], xmm0
+        add rbx, 8
+        dec r12
+        test r12, r12
+        jnz IW_LBG_H
+    ; init all output weights
+    lea rbx, [OUTPUT_WEIGHTS]
+    mov r12, OUTPUT_NCT     ; 300
+    IW_LBG_O:
+        call RANDOM_FLOAT
+        movsd [rbx], xmm0
+        add rbx, 8
+        dec r12
+        test r12, r12
+        jnz IW_LBG_O
+    ret
 
 RANDOM_FLOAT:
     ; return float in xmm0
