@@ -1,27 +1,27 @@
 ; nasm -f elf64 network.asm -o network.o && gcc -m64 network.o -o network -nostartfiles -no-pie -lc
 section .data
     ; file i/o
-        FILENAME    db    'file.txt', 0
-        READONLY    equ   0
-        WRITEONLY   equ   1
-        READWRITE   equ   2
+    FILENAME    db    'file.txt', 0
+    READONLY    equ   0
+    WRITEONLY   equ   1
+    READWRITE   equ   2
     ; cstd i/o
-        FLOAT_PERC  db    '%f', 0xA, 0
-        INT_PERC    db    '%d', 0xA, 0
+    FLOAT_PERC  db    '%f', 0xA, 0
+    INT_PERC    db    '%d', 0xA, 0
     ; network consts
-        HIDDEN_NCT  equ   23520
-        OUTPUT_NCT  equ   300
-        INPUT_CT    equ   784
-        HIDDEN_CT   equ   30 
-        OUTPUT_CT   equ   10
-        EULER       dq    2.718281828
+    HIDDEN_NCT  equ   23520
+    OUTPUT_NCT  equ   300
+    INPUT_CT    equ   784
+    HIDDEN_CT   equ   30 
+    OUTPUT_CT   equ   10
+    EULER       dq    2.718281828
     ; for random float generation
-        INT_MAX     equ   0x7FFFFFFFFFFFFFFF
+    INT_MAX     equ   0x7FFFFFFFFFFFFFFF
     ; prng xoshiro256
-        XORSHI_0    dq    0xA22CD65BFF6B2CE0
-        XORSHI_1    dq    0x7AF05449A5465795
-        XORSHI_2    dq    0xF46F7AAF65D601E1
-        XORSHI_3    dq    0xC5DB0BDFE6A51996
+    XORSHI_0    dq    0xA22CD65BFF6B2CE0
+    XORSHI_1    dq    0x7AF05449A5465795
+    XORSHI_2    dq    0xF46F7AAF65D601E1
+    XORSHI_3    dq    0xC5DB0BDFE6A51996
 
 section .bss
     INPUTS          resq  784
@@ -31,6 +31,7 @@ section .bss
     OUTPUT_BIASES   resq  10
     HIDDEN_OUTPUT   resq  30
     OUTPUT_OUTPUT   resq  10
+    ACTUAL_VALUE    resq  1
 
 section .text
     global _start
@@ -40,65 +41,131 @@ _start:
     fninit                  ; initialize the fpu
     call INIT_WEIGHTS       ; create prand weights
     call INIT_BIASES        ; create prand biases
-    ; call PRINT_WEIGHTS
-    ; call PRINT_BIASES
-    call TEST1_INPUTS       ; tested
-    ; call PRINT_INPUTS
-    call ZERO_OUTPUTS       ; tested
-    ; call PRINT_OUTPUTS
-    ; call FORWARD_PROP     ; ...
-                            ; needs more work
+    mov rdi, 3
+    call FEED_FORWARD       ; wrapper for all forward prop functions
 
     call EXIT               ; return 0;
 
+; NO GET_INPUT YET, SUBSTITUTE WITH TEST1_INPUTS
+FEED_FORWARD:
+    ; rdi = 0b0001 = print estimate 
+    ; rdi = 0b0010 = print output
 
+    ; REPLACE WITH GET_INPUTS
+    sub rsp, 8
+    mov [rsp], rdi
+    call TEST1_INPUTS
+    call FORWARD_PROP
+    call GET_ESTIMATE
+    mov rdi, [rsp]
+
+    test rdi, 1             ; rdi & 0b01
+    jz FF_P_OUT
+    mov rsi, rax
+    call PRINT_INT
+    FF_P_OUT:               ; rdi & 0b10
+        test rdi, 2
+        jz FF_EXIT
+        call PRINT_OUTPUTS
+
+    FF_EXIT:
+    add rsp, 8
+    ret
+
+GET_ESTIMATE:
+    push rbx
+    fldz
+    fld1
+    fsubp                   ; st1 = 0-1 = -1, pop st0
+    sub rsp, 8
+    fstp qword [rsp]
+    movsd xmm1, qword [rsp]
+    add rsp, 8              ; xmm0 = -1.0
+    mov rcx, 0
+    mov rbx, 0
+    GE_LBG:
+        lea rax, [OUTPUT_OUTPUT+(rbx*8)]
+        movsd xmm0, qword [rax]
+        ucomisd xmm0, xmm1
+        ja OVERRIDE_EST     ; jump if xmm0 > xmm1
+        inc rbx
+        cmp rbx, OUTPUT_CT
+        jne GE_LBG
+        jmp GE_END
+    OVERRIDE_EST:
+        movsd xmm1, xmm0      ; xmm1 holds largest value
+        mov rcx, rbx
+        inc rbx
+        cmp rbx, OUTPUT_CT
+        jne GE_LBG
+    GE_END:
+    pop rbx
+    mov rax, rcx        ; return rax
+    ret
 
 FORWARD_PROP:
-    ; ALL HIDDEN OUTPUTS
-    mov rcx, 0              ; 0->23520, h node ct
-    mov r9, 0               ; 0->30, node number
-    HIDDEN_OUTER_BG:
-        mov rdx, 0          ; 0->784
-        fld1                ; set st0 = 0.0
-        fld1
-        fsubp
-        sub rsp, 16
-        HIDDEN_INNER_BG:
-            lea rax, [HIDDEN_WEIGHTS+rcx*8]
-            lea r8, [INPUTS+rdx*8]
-            mov [rsp+8], r8
-            mov [rsp], rax
-            fld qword [rsp+8]
-            fld qword [rsp]
+    ; input->hidden = HIDDEN_OUTPUT
+    mov rbx, 0              ; count 0->30
+    FP_LOOP_HNODES:
+        fldz
+        mov r12, 0          ; count 0->784
+        mov rax, rbx        ; rbx * 784
+        mov rcx, INPUT_CT
+        mul rcx             ; rax = node offset
+        lea rax, [HIDDEN_WEIGHTS+(rax*8)]
+        lea rdi, INPUTS
+        FP_LOOP_INPUTS:
+            fld qword [rax]
+            fld qword [rdi]
             fmulp
-            faddp           ; st0 holds sum
-            inc rcx
-            inc rdx
-            cmp rdx, INPUT_CT
-            jne HIDDEN_INNER_BG
-
-        ; st0 = \sum(weight[node][i]*input[i])
-        ; add bias
-        lea rax, [HIDDEN_BIASES+r9*8]
-        mov [rsp], rax
-        fld qword [rsp]
-        faddp               ; st0 = \sum(weights*inputs) + bias
-        fstp qword [rsp]
-        movsd xmm0, qword [rsp]
-        call SIGMOID        ; \sigma(calc) in xmm0
-
-        ; NEED TO SAVE IN HIDDEN_OUTPUT[x] HERE
-        lea rax, [HIDDEN_OUTPUT+r9*8]
-        movsd qword [rax], xmm0
-
-        add rsp, 16
-        add rcx, INPUT_CT
-        inc r9
-        cmp rcx, HIDDEN_NCT
-        jne HIDDEN_OUTER_BG
-
-    ; ALL OUTPUT OUTPUTS
-    ; LARGEST NUMBER IN RAX
+            faddp           ; st0 always contains sum
+            inc r12
+            add rax, 8
+            add rdi, 8
+            cmp r12, INPUT_CT
+            jne FP_LOOP_INPUTS
+        lea r12, [HIDDEN_BIASES+(rbx*8)]
+        fld qword [r12]
+        faddp
+        lea r12, [HIDDEN_OUTPUT+(rbx*8)]
+        fstp qword [r12]
+        movsd xmm0, qword [r12]
+        call SIGMOID
+        movsd [r12], xmm0   ; sig(w*i+b) in [r12], H_OUTPUT+offset
+        inc rbx
+        cmp rbx, HIDDEN_CT
+        jne FP_LOOP_HNODES   ; add bias to st0, sigmoid all
+    ; hidden->output = OUTPUT_OUTPUT
+    mov rbx, 0              ; count 0->10
+    FP_LOOP_HOUTPUT:
+        fldz
+        mov r12, 0          ; count 0->30
+        mov rax, rbx        ; rbx * 30
+        mov rcx, HIDDEN_CT
+        mul rcx
+        lea rax, [OUTPUT_WEIGHTS+(rax*8)]
+        lea rdi, HIDDEN_OUTPUT
+        FP_LOOP_HIDDENS:
+            fld qword [rax]
+            fld qword [rdi]
+            fmulp
+            faddp 
+            inc r12
+            add rax, 8
+            add rdi, 8
+            cmp r12, HIDDEN_CT
+            jne FP_LOOP_HIDDENS
+        lea r12, [OUTPUT_BIASES+(rbx*8)]
+        fld qword [r12]
+        faddp
+        lea r12, [OUTPUT_OUTPUT+(rbx*8)]
+        fstp qword [r12]
+        movsd xmm0, qword[r12]
+        call SIGMOID
+        movsd [r12], xmm0
+        inc rbx
+        cmp rbx, OUTPUT_CT
+        jne FP_LOOP_HOUTPUT
     ret
 
 PRINT_OUTPUTS:
@@ -356,13 +423,11 @@ PRINT_INT:
     ; "%d" in rdi
     ; int in rsi
     ; 1 in rax?
-    push rax
     push rdi
     mov rax, 1
     mov rdi, INT_PERC
     call printf
     pop rdi
-    pop rax
     ret
 
 PRINT_FLOAT:
