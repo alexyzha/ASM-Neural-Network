@@ -27,6 +27,8 @@ section .bss
     INPUTS          resq  784
     HIDDEN_WEIGHTS  resq  23520
     OUTPUT_WEIGHTS  resq  300
+    HIDDEN_BIASES   resq  30 
+    OUTPUT_BIASES   resq  10
     HIDDEN_OUTPUT   resq  30
     OUTPUT_OUTPUT   resq  10
 
@@ -37,31 +39,122 @@ section .text
 _start:
     fninit                  ; initialize the fpu
     call INIT_WEIGHTS       ; create prand weights
-    call PRINT_WEIGHTS
-
+    call INIT_BIASES        ; create prand biases
+    ; call PRINT_WEIGHTS
+    ; call PRINT_BIASES
+    call TEST1_INPUTS       ; tested
+    ; call PRINT_INPUTS
+    call ZERO_OUTPUTS       ; tested
+    ; call PRINT_OUTPUTS
+    ; call FORWARD_PROP     ; ...
+                            ; needs more work
 
     call EXIT               ; return 0;
 
 
+
 FORWARD_PROP:
-    ; assumes all inputs already in input array
-    mov rax, HIDDEN_NCT
-    dec rax
-    mov rcx, 8
-    mul rcx                 ; rax = 23519 * 8, offset of last qword
-    ITER_ALL_HIDDEN:
-        lea rcx, [HIDDEN_WEIGHTS]+rax
-        mov rdx, HIDDEN_CT
-        ITER_HIDDEN_NODE:
+    ; ALL HIDDEN OUTPUTS
+    mov rcx, 0              ; 0->23520, h node ct
+    mov r9, 0               ; 0->30, node number
+    HIDDEN_OUTER_BG:
+        mov rdx, 0          ; 0->784
+        fld1                ; set st0 = 0.0
+        fld1
+        fsubp
+        sub rsp, 16
+        HIDDEN_INNER_BG:
+            lea rax, [HIDDEN_WEIGHTS+rcx*8]
+            lea r8, [INPUTS+rdx*8]
+            mov [rsp+8], r8
+            mov [rsp], rax
+            fld qword [rsp+8]
+            fld qword [rsp]
+            fmulp
+            faddp           ; st0 holds sum
+            inc rcx
+            inc rdx
+            cmp rdx, INPUT_CT
+            jne HIDDEN_INNER_BG
 
+        ; st0 = \sum(weight[node][i]*input[i])
+        ; add bias
+        lea rax, [HIDDEN_BIASES+r9*8]
+        mov [rsp], rax
+        fld qword [rsp]
+        faddp               ; st0 = \sum(weights*inputs) + bias
+        fstp qword [rsp]
+        movsd xmm0, qword [rsp]
+        call SIGMOID        ; \sigma(calc) in xmm0
 
+        ; NEED TO SAVE IN HIDDEN_OUTPUT[x] HERE
+        lea rax, [HIDDEN_OUTPUT+r9*8]
+        movsd qword [rax], xmm0
 
+        add rsp, 16
+        add rcx, INPUT_CT
+        inc r9
+        cmp rcx, HIDDEN_NCT
+        jne HIDDEN_OUTER_BG
 
+    ; ALL OUTPUT OUTPUTS
+    ; LARGEST NUMBER IN RAX
+    ret
 
-        test rax, rax
-        jnz ITER_ALL_HIDDEN
+PRINT_OUTPUTS:
+    ; print hidden outputs
+    lea rbx, HIDDEN_OUTPUT
+    mov r12, 0
+    PO_LBG_H:
+        movsd xmm0, qword [rbx]
+        call PRINT_FLOAT
+        add rbx, 8
+        inc r12
+        cmp r12, HIDDEN_CT
+        jne PO_LBG_H
+    ; print output outputs
+    lea rbx, OUTPUT_OUTPUT
+    mov r12, 0
+    PO_LBG_O:
+        movsd xmm0, qword [rbx]
+        call PRINT_FLOAT
+        add rbx, 8
+        inc r12
+        cmp r12, OUTPUT_CT
+        jne PO_LBG_O
+    ret
 
-ZERO_OUTPUT:
+TEST1_INPUTS:
+    ; put 1.0 in xmm0
+    sub rsp, 8
+    fld1
+    fstp qword [rsp]
+    movsd xmm0, qword [rsp]
+    add rsp, 8
+    ; put 1.0 in all inputs
+    mov rcx, 0
+    lea rax, [INPUTS]
+    TI_LBG:
+        movsd qword [rax], xmm0
+        add rax, 8
+        inc rcx 
+        cmp rcx, INPUT_CT
+        jne TI_LBG
+    ret
+
+PRINT_INPUTS:
+    mov r12, 0
+    lea rbx, [INPUTS]
+    PI_LBG:
+        movsd xmm0, qword [rbx]
+        call PRINT_FLOAT
+        add rbx, 8
+        inc r12
+        cmp r12, INPUT_CT
+        jne PI_LBG
+    ret
+
+ZERO_OUTPUTS:
     fld1
     fld1
     fsubp
@@ -113,6 +206,29 @@ PRINT_WEIGHTS:
         jnz PW_LBG_O
     ret
 
+PRINT_BIASES:
+    ; print hidden biases
+    lea rbx, [HIDDEN_BIASES]
+    mov r12, HIDDEN_CT
+    PB_LBG_H:
+        movsd xmm0, qword [rbx]
+        call PRINT_FLOAT
+        add rbx, 8
+        dec r12
+        test r12, r12
+        jnz PB_LBG_H
+    ; print output biases
+    lea rbx, [OUTPUT_BIASES]
+    mov r12, OUTPUT_CT
+    PB_LBG_O:
+        movsd xmm0, qword [rbx]
+        call PRINT_FLOAT
+        add rbx, 8
+        dec r12
+        test r12, r12
+        jnz PB_LBG_O
+    ret
+
 INIT_WEIGHTS:
     ; init all hidden weights
     lea rbx, [HIDDEN_WEIGHTS]
@@ -136,6 +252,29 @@ INIT_WEIGHTS:
         jnz IW_LBG_O
     ret
 
+INIT_BIASES:
+    ; init hidden biases
+    lea rbx, [HIDDEN_BIASES]
+    mov r12, HIDDEN_CT
+    IB_LBG_H:
+        call RANDOM_FLOAT
+        movsd [rbx], xmm0
+        add rbx, 8
+        dec r12
+        test r12, r12
+        jnz IB_LBG_H
+    ; init output biases
+    lea rbx, [OUTPUT_BIASES]
+    mov r12, OUTPUT_CT
+    IB_LBG_O:
+        call RANDOM_FLOAT
+        movsd [rbx], xmm0
+        add rbx, 8
+        dec r12
+        test r12, r12
+        jnz IB_LBG_O
+    ret
+
 RANDOM_FLOAT:
     ; return float in xmm0
     sub rsp, 16
@@ -153,11 +292,11 @@ RANDOM_FLOAT:
     ret
 
 XORSHIT:
-    mov rax, [XORSHI_0]
-    add rax, [XORSHI_3]     ; return x[0] + x[3]
     push rbx
     push rcx
     push rdx
+    mov rax, [XORSHI_0]
+    add rax, [XORSHI_3]     ; return x[0] + x[3]
 
     mov rbx, [XORSHI_1]
     shl rbx, 17             ; t = x[1] << 17
