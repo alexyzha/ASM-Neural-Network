@@ -69,8 +69,66 @@ _start:
 
 BACK_PROPAGATE:
     call OUTPUT_BACK
+    call HIDDEN_BACK
     ret
 
+HIDDEN_BACK:
+    ; output deltas in OUTPUT_OUTPUT
+    mov rbx, 0              ; 0->30
+    HB_LOOP_HIDDEN:
+        ; get contribution from output nodes
+        lea rax, [HIDDEN_OUTPUT+(rbx*8)]
+        movsd xmm0, qword [rax] 
+        call SIGDER         ; sigder(hidden inputs) in xmm0
+        mov rcx, 0          ; 0->10
+        lea rax, [OUTPUT_WEIGHTS+(rbx*8)]
+        lea rdx, [OUTPUT_OUTPUT]
+        xorpd xmm1, xmm1    ; 0 out xmm1 for sum
+        HB_LOOP_OUTPUT:
+            movsd xmm2, qword [rdx]
+            movsd xmm3, qword [rax]
+            mulsd xmm2, xmm3
+            addsd xmm1, xmm2
+            add rdx, 8
+            add rax, 240    ; skip to next node weight offset
+            inc rcx
+            cmp rcx, OUTPUT_CT
+            jne HB_LOOP_OUTPUT
+        mulsd xmm0, xmm1    
+        lea rax, [HIDDEN_OUTPUT+(rbx*8)]
+        movsd [rax], xmm0   ; hidden output[i] no longer used, replace with hidden delta[i]
+        ; get effect on input->hidden weights
+        mov rax, rbx
+        mov rcx, INPUT_CT
+        mov rdx, 0
+        mul rcx
+        lea rax, [HIDDEN_WEIGHTS+(rax*8)]
+        lea rcx, [INPUTS]
+        HB_LOOP_HIDDEN_UPDATE:
+            movsd xmm1, qword [INPUTS]
+            mulsd xmm1, xmm0
+            movsd xmm2, qword [ALPHA]
+            mulsd xmm1, xmm0
+            movsd xmm2, qword [rax]
+            subsd xmm2, xmm1
+            movsd [rax], xmm0
+            ; update weight^
+            add rax, 8
+            add rcx, 8
+            inc rdx 
+            cmp rdx, INPUT_CT
+            jne HB_LOOP_HIDDEN_UPDATE
+        ; now update node bias
+        lea rax, [HIDDEN_BIASES+(rbx*8)]
+        movsd xmm1, qword [rax]
+        movsd xmm2, qword [ALPHA]
+        mulsd xmm2, xmm0
+        subsd xmm1, xmm2
+        movsd [rax], xmm1
+        inc rbx
+        cmp rbx, HIDDEN_CT
+        jne HB_LOOP_HIDDEN
+    ret
 
 OUTPUT_BACK:
     mov rbx, 0              ; 0->10, all output nodes
@@ -89,6 +147,10 @@ OUTPUT_BACK:
         fmulp               ; st0 = delta output node i
         fld qword [ALPHA]   ; alpha = learning rate
         fmulp
+        lea rax, [OUTPUT_BIASES+(rbx*8)]
+        fld qword [rax]     ; update bias
+        fsubr               ; st0 = st1-st0
+        fstp qword [rax]    ; save updated bias
         mov rax, rbx        
         mov rcx, 30         ; get weight offset
         mul rcx
