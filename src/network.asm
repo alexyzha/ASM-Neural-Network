@@ -40,9 +40,7 @@ section .bss
     HOUT_SIGMOID    resq  30
     OOUT_SIGMOID    resq  10
 
-    ACTUAL_VALUE    resq  1
-    NABLA_IHW       resq  23520
-    NABLA_HOW       resq  300
+    ACTUAL_VALUE    resq  10
 
 
 section .text
@@ -55,12 +53,62 @@ _start:
     call INIT_BIASES        ; create prand biases
     mov rdi, 3
     call FEED_FORWARD       ; wrapper for all forward prop functions
-
+    
+    mov rax, 0
+    lea rcx, [ACTUAL_VALUE]
+    LOOP:
+        fldz
+        fstp qword [rcx]
+        add rcx, 8
+        inc rax
+        cmp rax, 10
+        jne LOOP
+    
+    call BACK_PROPAGATE
     call EXIT               ; return 0;
 
-CALCULATE_GRADIENT:
-    
+BACK_PROPAGATE:
+    call OUTPUT_BACK
+    ret
 
+
+OUTPUT_BACK:
+    mov rbx, 0              ; 0->10, all output nodes
+    OB_NODE_ITER:
+        lea rax, [OOUT_SIGMOID+(rbx*8)]
+        fld qword [rax]
+        lea rax, [ACTUAL_VALUE+(rbx*8)]
+        fld qword [rax]
+        fsubp               ; estimate (st1) - actual (st0), pop st0
+        lea rax, [OUTPUT_OUTPUT+(rbx*8)]
+        movsd xmm0, qword [rax]
+        call SIGDER
+        lea rax, [OUTPUT_OUTPUT+(rbx*8)]
+        movsd [rax], xmm0   ; override OUTPUT_OUTPUT[i], since its unused later
+        fld qword [rax]
+        fmulp               ; st0 = delta output node i
+        fld qword [ALPHA]   ; alpha = learning rate
+        fmulp
+        mov rax, rbx        
+        mov rcx, 30         ; get weight offset
+        mul rcx
+        mov rcx, 0
+        lea rax, [OUTPUT_WEIGHTS+(rax*8)]
+        OB_WEIGHTS_ITER:
+            lea rdx, [HIDDEN_OUTPUT+(rcx*8)]
+            fld qword [rdx] ; load output node input[i]
+            fmul            ; st0 = st0*st1 -> = delta weight[i][j]
+            fld qword [rax] ; load weight[i][j]
+            fsubrp          ; st1 = st0-st1, pop st0
+            fstp qword [rax]
+            add rax, 8
+            inc rcx
+            cmp rcx, 30
+            jne OB_WEIGHTS_ITER
+        inc rbx
+        cmp rbx, 10
+        jne OB_NODE_ITER
+    ret
 
 FEED_FORWARD:
     ; rdi = 0b0001 = print estimate 
@@ -457,8 +505,9 @@ SIGMOID:
 SIGDER:
     ; x in xmm0
     ; return in xmm0
-    call SIGMOID
+    push rax
     sub rsp, 8
+    call SIGMOID
     movsd [rsp], xmm0
     fld1
     fld qword [rsp]
@@ -468,6 +517,7 @@ SIGDER:
     fstp qword [rsp]
     movsd xmm0, qword [rsp]
     add rsp, 8
+    pop rax
     ret
 
 PRINT_INT:
