@@ -8,6 +8,8 @@ section .data
     ; cstd i/o
     FLOAT_PERC  db    '%f', 0xA, 0
     INT_PERC    db    '%d', 0xA, 0
+    STR_PERC    db    '%s', 0xA, 0
+    ENDL        db    0
     ; network consts
     HIDDEN_NCT  equ   23520
     OUTPUT_NCT  equ   300
@@ -15,6 +17,7 @@ section .data
     HIDDEN_CT   equ   30 
     OUTPUT_CT   equ   10
     EULER       dq    2.718281828
+    ALPHA       dq    0.07
     ; for random float generation
     INT_MAX     equ   0x7FFFFFFFFFFFFFFF
     ; prng xoshiro256
@@ -27,11 +30,20 @@ section .bss
     INPUTS          resq  784
     HIDDEN_WEIGHTS  resq  23520
     OUTPUT_WEIGHTS  resq  300
+    
     HIDDEN_BIASES   resq  30 
     OUTPUT_BIASES   resq  10
+    
     HIDDEN_OUTPUT   resq  30
     OUTPUT_OUTPUT   resq  10
+
+    HOUT_SIGMOID    resq  30
+    OOUT_SIGMOID    resq  10
+
     ACTUAL_VALUE    resq  1
+    NABLA_IHW       resq  23520
+    NABLA_HOW       resq  300
+
 
 section .text
     global _start
@@ -46,7 +58,10 @@ _start:
 
     call EXIT               ; return 0;
 
-; NO GET_INPUT YET, SUBSTITUTE WITH TEST1_INPUTS
+CALCULATE_GRADIENT:
+    
+
+
 FEED_FORWARD:
     ; rdi = 0b0001 = print estimate 
     ; rdi = 0b0010 = print output
@@ -63,10 +78,21 @@ FEED_FORWARD:
     jz FF_P_OUT
     mov rsi, rax
     call PRINT_INT
+    call PRINT_NEWL
+
     FF_P_OUT:               ; rdi & 0b10
         test rdi, 2
         jz FF_EXIT
+        ; print normal output
+        mov rdi, HIDDEN_OUTPUT
+        mov rsi, OUTPUT_OUTPUT
         call PRINT_OUTPUTS
+        call PRINT_NEWL
+        ; print sigmoid output
+        mov rdi, HOUT_SIGMOID
+        mov rsi, OOUT_SIGMOID
+        call PRINT_OUTPUTS
+        call PRINT_NEWL
 
     FF_EXIT:
     add rsp, 8
@@ -84,7 +110,7 @@ GET_ESTIMATE:
     mov rcx, 0
     mov rbx, 0
     GE_LBG:
-        lea rax, [OUTPUT_OUTPUT+(rbx*8)]
+        lea rax, [OOUT_SIGMOID+(rbx*8)]
         movsd xmm0, qword [rax]
         ucomisd xmm0, xmm1
         ja OVERRIDE_EST     ; jump if xmm0 > xmm1
@@ -130,6 +156,8 @@ FORWARD_PROP:
         lea r12, [HIDDEN_OUTPUT+(rbx*8)]
         fstp qword [r12]
         movsd xmm0, qword [r12]
+        movsd [r12], xmm0
+        lea r12, [HOUT_SIGMOID+(rbx*8)]
         call SIGMOID
         movsd [r12], xmm0   ; sig(w*i+b) in [r12], H_OUTPUT+offset
         inc rbx
@@ -144,7 +172,7 @@ FORWARD_PROP:
         mov rcx, HIDDEN_CT
         mul rcx
         lea rax, [OUTPUT_WEIGHTS+(rax*8)]
-        lea rdi, HIDDEN_OUTPUT
+        lea rdi, HOUT_SIGMOID
         FP_LOOP_HIDDENS:
             fld qword [rax]
             fld qword [rdi]
@@ -161,6 +189,8 @@ FORWARD_PROP:
         lea r12, [OUTPUT_OUTPUT+(rbx*8)]
         fstp qword [r12]
         movsd xmm0, qword[r12]
+        movsd [r12], xmm0
+        lea r12, [OOUT_SIGMOID+(rbx*8)]
         call SIGMOID
         movsd [r12], xmm0
         inc rbx
@@ -170,7 +200,8 @@ FORWARD_PROP:
 
 PRINT_OUTPUTS:
     ; print hidden outputs
-    lea rbx, HIDDEN_OUTPUT
+    ; 
+    lea rbx, [rdi]
     mov r12, 0
     PO_LBG_H:
         movsd xmm0, qword [rbx]
@@ -179,8 +210,12 @@ PRINT_OUTPUTS:
         inc r12
         cmp r12, HIDDEN_CT
         jne PO_LBG_H
+    ; align stack to print newline
+    sub rsp, 8
+    call PRINT_NEWL
+    add rsp, 8
     ; print output outputs
-    lea rbx, OUTPUT_OUTPUT
+    lea rbx, [rsi]
     mov r12, 0
     PO_LBG_O:
         movsd xmm0, qword [rbx]
@@ -419,6 +454,22 @@ SIGMOID:
     add rsp, 8                  ; clean stack
     ret
 
+SIGDER:
+    ; x in xmm0
+    ; return in xmm0
+    call SIGMOID
+    sub rsp, 8
+    movsd [rsp], xmm0
+    fld1
+    fld qword [rsp]
+    fsubp
+    fld qword [rsp]
+    fmulp
+    fstp qword [rsp]
+    movsd xmm0, qword [rsp]
+    add rsp, 8
+    ret
+
 PRINT_INT:
     ; "%d" in rdi
     ; int in rsi
@@ -434,13 +485,29 @@ PRINT_FLOAT:
     ; double in xmm0
     ; "%f" in rdi
     ; 1 in rax
-    push rax
+    push rsi
     push rdi
     mov rdi, FLOAT_PERC
     mov rax, 1
     call printf
     pop rdi
+    pop rsi
+    ret
+
+PRINT_NEWL:
+    ; '%s' in rdi
+    ; 1 in rax
+    ; endl in rsi
+    push rsi
+    push rdi
+    push rax
+    mov rsi, ENDL
+    mov rdi, STR_PERC
+    mov rax, 1
+    call printf
     pop rax
+    pop rdi
+    pop rsi
     ret
 
 EXIT:
