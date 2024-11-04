@@ -1,3 +1,7 @@
 .DS_Store
 *.o
 obj
+.ipynb_checkpoints
+test.txt
+train.txt
+validation.txt

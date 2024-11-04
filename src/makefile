@@ -2,7 +2,7 @@ OUT = ./obj/network
 OBJ = ./obj
 SRC = network.asm
 NASM_FLAGS = -f elf64
-GCC_FLAGS = -m64 -nostartfiles -no-pie -lc
+GCC_FLAGS = -m64 -nostartfiles -no-pie -lc -g
 
 all: $(OBJ) $(OUT) run
 

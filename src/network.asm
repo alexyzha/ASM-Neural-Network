@@ -4,6 +4,7 @@ section .data
     FILENAME    db    'file.txt', 0
     READONLY    equ   0
     WRITEONLY   equ   1
+    READ        db    'r', 0
     READWRITE   equ   2
     ; cstd i/o
     FLOAT_PERC  db    '%f', 0xA, 0
@@ -42,11 +43,16 @@ section .bss
 
     ACTUAL_VALUE    resq  10
 
+    FILE_HANDLE     resq  1
+    FILE_IN         resq  1
 
 section .text
     global _start
     extern printf
     extern exp
+    extern fscanf
+    extern fopen
+    extern fclose
 _start:
     fninit                  ; initialize the fpu
     call INIT_WEIGHTS       ; create prand weights
@@ -65,6 +71,29 @@ _start:
         jne LOOP
     
     call BACK_PROPAGATE
+
+    mov rdi, FILENAME
+    mov rsi, READ
+    call fopen
+    test rax, rax
+    jz EXIT
+
+    mov [FILE_HANDLE], rax
+    mov rdi, rax
+    mov rsi, FLOAT_PERC
+    mov rdx, FILE_IN
+    call fscanf
+    mov rsi, [FILE_IN]
+    mov rdi, INT_PERC
+    call printf
+    fld qword [FILE_IN]
+    sub rsp, 8
+    fstp qword [rsp]
+    movq xmm0, qword [rsp]
+    add rsp, 8
+    call PRINT_FLOAT
+
+
     call EXIT               ; return 0;
 
 BACK_PROPAGATE:
@@ -596,11 +625,9 @@ PRINT_INT:
 PRINT_FLOAT:
     ; double in xmm0
     ; "%f" in rdi
-    ; 1 in rax
     push rsi
     push rdi
     mov rdi, FLOAT_PERC
-    mov rax, 1
     call printf
     pop rdi
     pop rsi
