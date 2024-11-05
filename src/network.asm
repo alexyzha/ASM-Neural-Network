@@ -1,7 +1,6 @@
 ; nasm -f elf64 network.asm -o network.o && gcc -m64 network.o -o network -nostartfiles -no-pie -lc
 section .data
     ; file i/o
-    FILENAME        db    'file.txt', 0
     TRAINFILE       db    'data/text/train.txt', 0
     VALIDFILE       db    'data/text/validtion.txt', 0
     TESTFILE        db    'data/text/test.txt', 0
