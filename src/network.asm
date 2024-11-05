@@ -1,48 +1,53 @@
 ; nasm -f elf64 network.asm -o network.o && gcc -m64 network.o -o network -nostartfiles -no-pie -lc
 section .data
     ; file i/o
-    FILENAME    db    'file.txt', 0
-    READONLY    equ   0
-    WRITEONLY   equ   1
-    READ        db    'r', 0
-    READWRITE   equ   2
+    FILENAME        db    'file.txt', 0
+    TRAINFILE       db    'data/text/train.txt', 0
+    VALIDFILE       db    'data/text/validtion.txt', 0
+    TESTFILE        db    'data/text/test.txt', 0
+    READONLY        equ   0
+    WRITEONLY       equ   1
+    READ            db    'r', 0
+    READWRITE       equ   2
     ; cstd i/o
-    FLOAT_PERC  db    '%f', 0xA, 0
-    INT_PERC    db    '%d', 0xA, 0
-    STR_PERC    db    '%s', 0xA, 0
-    ENDL        db    0
+    DOUBLE_PERC     db    '%lf', 0xA, 0
+    FLOAT_PERC      db    '%f', 0xA, 0
+    INT_PERC        db    '%d', 0xA, 0
+    STR_PERC        db    '%s', 0xA, 0
+    ENDL            db    0
     ; network consts
-    HIDDEN_NCT  equ   23520
-    OUTPUT_NCT  equ   300
-    INPUT_CT    equ   784
-    HIDDEN_CT   equ   30 
-    OUTPUT_CT   equ   10
-    EULER       dq    2.718281828
-    ALPHA       dq    0.07
+    HIDDEN_NCT      equ   23520
+    OUTPUT_NCT      equ   300
+    INPUT_CT        equ   784
+    HIDDEN_CT       equ   30 
+    OUTPUT_CT       equ   10
+    EULER           dq    2.718281828
+    ALPHA           dq    3.0
+    T_OR_V_CT       dq    10000
     ; for random float generation
-    INT_MAX     equ   0x7FFFFFFFFFFFFFFF
+    INT_MAX         equ   0x7FFFFFFFFFFFFFFF
     ; prng xoshiro256
-    XORSHI_0    dq    0xA22CD65BFF6B2CE0
-    XORSHI_1    dq    0x7AF05449A5465795
-    XORSHI_2    dq    0xF46F7AAF65D601E1
-    XORSHI_3    dq    0xC5DB0BDFE6A51996
+    XORSHI_0        dq    0x7AF05449A5465795
+    XORSHI_1        dq    0xA22CD65BFF6B2CE0
+    XORSHI_2        dq    0xF46F7AAF65D601E1
+    XORSHI_3        dq    0xC5DB0BDFE6A51996
 
 section .bss
-    INPUTS          resq  784
+    ; weights
     HIDDEN_WEIGHTS  resq  23520
     OUTPUT_WEIGHTS  resq  300
-    
+    ; biases
     HIDDEN_BIASES   resq  30 
     OUTPUT_BIASES   resq  10
-    
+    ; i/o
+    INPUTS          resq  784
     HIDDEN_OUTPUT   resq  30
     OUTPUT_OUTPUT   resq  10
-
+    ACTUAL_VALUE    resq  10
+    ; backprop
     HOUT_SIGMOID    resq  30
     OOUT_SIGMOID    resq  10
-
-    ACTUAL_VALUE    resq  10
-
+    ; file
     FILE_HANDLE     resq  1
     FILE_IN         resq  1
 
@@ -57,44 +62,103 @@ _start:
     fninit                  ; initialize the fpu
     call INIT_WEIGHTS       ; create prand weights
     call INIT_BIASES        ; create prand biases
-    mov rdi, 3
-    call FEED_FORWARD       ; wrapper for all forward prop functions
-    
-    mov rax, 0
-    lea rcx, [ACTUAL_VALUE]
-    LOOP:
-        fldz
-        fstp qword [rcx]
-        add rcx, 8
-        inc rax
-        cmp rax, 10
-        jne LOOP
-    
-    call BACK_PROPAGATE
+    call TRAIN
+    mov rdi, TESTFILE
+    call TEST_OR_VALIDATE
+    call EXIT               ; return 0;
 
-    mov rdi, FILENAME
+TEST_OR_VALIDATE:
+    ; file name in rdi
     mov rsi, READ
     call fopen
-    test rax, rax
-    jz EXIT
-
     mov [FILE_HANDLE], rax
-    mov rdi, rax
-    mov rsi, FLOAT_PERC
+    ; get count from file line 0
+    mov rdi, [FILE_HANDLE]
+    mov rsi, INT_PERC
     mov rdx, FILE_IN
+    sub rsp, 8              ; stack align
     call fscanf
-    mov rsi, [FILE_IN]
-    mov rdi, INT_PERC
-    call printf
-    fld qword [FILE_IN]
-    sub rsp, 8
-    fstp qword [rsp]
-    movq xmm0, qword [rsp]
     add rsp, 8
-    call PRINT_FLOAT
+    mov r14, [FILE_IN]      ; 10000->0
+    mov r12, 0              ; count correct
+    mov r13, INT_MAX
+    TV_LBG:
+        call READ_IMAGE
+        mov rdi, 0
+        call FEED_FORWARD   ; result in rax
+        lea rcx, [ACTUAL_VALUE+(rax*8)]
+        mov rcx, [rcx]      ; rcx & 0x7f... = 0 then 0, excl sign bit
+        test rcx, r13
+        jz TV_NOINC
+        inc r12
+        TV_NOINC:
+        ; mov rsi, r14        ; print
+        ; sub rsp, 8
+        ; call PRINT_INT
+        ; add rsp, 8
+        dec r14
+        test r14, r14
+        jnz TV_LBG
+    sub rsp, 8              ; compute/save percent correct result
+    mov [rsp], r12
+    fild qword [rsp]
+    fild qword [T_OR_V_CT]
+    fdivrp
+    fstp qword [rsp]
+    movsd xmm0, qword [rsp]
+    add rsp, 8
+    ; call PRINT_FLOAT
+    ret
+        
+TRAIN:
+    mov rdi, TRAINFILE
+    mov rsi, READ
+    call fopen
+    mov [FILE_HANDLE], rax  ; get file handle
+    ; get count from file line 0
+    mov rdi, [FILE_HANDLE]
+    mov rsi, INT_PERC
+    mov rdx, FILE_IN
+    sub rsp, 8
+    call fscanf
+    add rsp, 8
+    mov r13, [FILE_IN]      ; 50000->0
+    TRAIN_LBG:
+        call READ_IMAGE
+        mov rdi, 0          ; no print ff
+        call FEED_FORWARD
+        call BACK_PROPAGATE
+        ; mov rsi, r13
+        ; sub rsp, 8
+        ; call PRINT_INT
+        ; add rsp, 8
+        dec r13
+        test r13, r13
+        jnz TRAIN_LBG
+    ret
 
-
-    call EXIT               ; return 0;
+READ_IMAGE:
+    mov rbx, 0
+    ; get result vector
+    RI_LBG_A:
+        mov rdi, [FILE_HANDLE]
+        mov rsi, DOUBLE_PERC
+        lea rdx, [ACTUAL_VALUE+(rbx*8)]
+        call fscanf
+        inc rbx
+        cmp rbx, OUTPUT_CT
+        jne RI_LBG_A
+    ; get image values
+    mov rbx, 0
+    RI_LBG_I:
+        mov rdi, [FILE_HANDLE]
+        mov rsi, DOUBLE_PERC
+        lea rdx, [INPUTS+(rbx*8)]
+        call fscanf
+        inc rbx
+        cmp rbx, INPUT_CT
+        jne RI_LBG_I
+    ret
 
 BACK_PROPAGATE:
     call OUTPUT_BACK
@@ -205,13 +269,13 @@ FEED_FORWARD:
     ; rdi = 0b0001 = print estimate 
     ; rdi = 0b0010 = print output
 
-    ; REPLACE WITH GET_INPUTS
     sub rsp, 8
     mov [rsp], rdi
     call TEST1_INPUTS
     call FORWARD_PROP
     call GET_ESTIMATE
     mov rdi, [rsp]
+    mov [rsp], rax
 
     test rdi, 1             ; rdi & 0b01
     jz FF_P_OUT
@@ -616,7 +680,6 @@ PRINT_INT:
     ; int in rsi
     ; 1 in rax?
     push rdi
-    mov rax, 1
     mov rdi, INT_PERC
     call printf
     pop rdi
