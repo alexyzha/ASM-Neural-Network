@@ -1,1 +1,1 @@
-classic mnist neural network in asm
+# I <3 docker
